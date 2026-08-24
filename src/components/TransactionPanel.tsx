@@ -2,9 +2,12 @@ import { useState } from "react";
 import { IconClose, IconBox, IconMinus, IconPlus, IconArrowRight } from "./Icons";
 import { api, type Product, ApiError } from "../lib/api";
 
-// El flujo de "mover stock" rediseñado: entrada y salida son dos botones
-// igual de visibles (nunca un valor por defecto escondido), con una vista
-// previa del stock resultante ANTES de confirmar.
+// El flujo de "mover stock": entrada y salida son dos botones igual de
+// visibles con vista previa del stock resultante ANTES de confirmar.
+//
+// IMPORTANTE: ya no se hace una segunda llamada a api.products.update()
+// para actualizar el stock. El backend (POST /transactions) actualiza
+// products.quantity en un D1 batch atómico y devuelve stock_after.
 export function TransactionPanel({
   product,
   defaultType = "IN",
@@ -14,10 +17,12 @@ export function TransactionPanel({
   product: Product;
   defaultType?: "IN" | "OUT";
   onClose: () => void;
-  onDone: () => void;
+  /** Recibe el producto con el stock ya actualizado devuelto por el backend */
+  onDone: (updatedProduct?: Partial<Product>) => void;
 }) {
   const [type, setType] = useState<"IN" | "OUT">(defaultType);
   const [qty, setQty] = useState(1);
+  const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -29,9 +34,17 @@ export function TransactionPanel({
     setError("");
     setLoading(true);
     try {
-      await api.transactions.create({ product_id: product.id, quantity_change: qty * (type === "IN" ? 1 : -1), type });
-      await api.products.update(product.id, { quantity: resulting });
-      onDone();
+      // Una sola llamada: el backend actualiza el stock atómicamente.
+      // La respuesta incluye stock_after con el nuevo saldo del producto.
+      const tx = await api.transactions.create({
+        product_id: product.id,
+        quantity_change: qty,
+        type,
+        notes: notes.trim() || undefined,
+      });
+      // Notificar al padre con el stock actualizado para que lo refleje
+      // en la UI sin necesidad de re-fetch completo.
+      onDone({ id: product.id, quantity: tx.stock_after ?? resulting });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo registrar el movimiento.");
     } finally {
@@ -92,6 +105,16 @@ export function TransactionPanel({
             <span className={`preview-num after font-display${invalid ? " bad" : ""}`}>{resulting} unidades</span>
           </div>
           {invalid && <div className="form-error">No hay suficiente stock para esta salida.</div>}
+
+          <span className="field-label">Motivo (opcional)</span>
+          <input
+            className="notes-input"
+            type="text"
+            placeholder="Ej: recepción proveedor, venta mostrador, merma…"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            maxLength={200}
+          />
 
           <div className="spacer" />
           <button className="btn-confirm" onClick={submit} disabled={loading || invalid} type="button">

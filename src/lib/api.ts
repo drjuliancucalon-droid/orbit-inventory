@@ -1,8 +1,7 @@
 // Cliente API para Orbit/Stocket. Habla con un backend Cloudflare Worker + D1
 // multi-tenant (organization_id / org_role / is_super_admin) — ver stocket-be.
 //
-// La URL base se inyecta en tiempo de compilación (Vite) vía VITE_API_URL,
-// igual que en inventory-fe.
+// La URL base se inyecta en tiempo de compilación (Vite) vía VITE_API_URL.
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -21,8 +20,9 @@ export type Profile = {
 export type Product = {
   id: string;
   name: string;
+  sku?: string | null;           // código interno / barras (nuevo campo schema)
   description: string | null;
-  quantity: number;
+  quantity: number;              // SOLO LECTURA en PUT /products/:id — cambia via transactions
   price: number;
   created_by?: string;
   created_at: string;
@@ -35,6 +35,8 @@ export type Transaction = {
   product_name?: string;
   quantity_change: number;
   type: "IN" | "OUT";
+  notes?: string | null;         // motivo del movimiento (auditoría)
+  stock_after?: number;          // stock del producto tras aplicar este movimiento
   created_by?: string;
   created_at: string;
 };
@@ -67,7 +69,7 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
     super(message);
@@ -170,7 +172,7 @@ export const api = {
       const res = await fetch(`${API_URL}/products/${id}`, { headers: authHeaders() });
       return handleResponse<Product>(res);
     },
-    async create(input: { name: string; description?: string; quantity: number; price: number }) {
+    async create(input: { name: string; description?: string; quantity: number; price: number; sku?: string }) {
       requireApiUrl();
       const res = await fetch(`${API_URL}/products`, {
         method: "POST",
@@ -179,7 +181,9 @@ export const api = {
       });
       return handleResponse<Product>(res);
     },
-    async update(id: string, input: Partial<Pick<Product, "name" | "description" | "price" | "quantity">>) {
+    // NOTA: 'quantity' no está incluido en el tipo de update a propósito.
+    // El stock solo puede cambiar mediante api.transactions.create().
+    async update(id: string, input: Partial<Pick<Product, "name" | "description" | "price" | "sku">>) {
       requireApiUrl();
       const res = await fetch(`${API_URL}/products/${id}`, {
         method: "PUT",
@@ -196,7 +200,15 @@ export const api = {
   },
 
   transactions: {
-    async create(input: { product_id: string; quantity_change: number; type: "IN" | "OUT" }) {
+    // Crea una transacción IN/OUT. El backend actualiza el stock atómicamente
+    // y retorna stock_after con el nuevo saldo. No es necesaria ninguna
+    // llamada adicional a products.update() tras este método.
+    async create(input: {
+      product_id: string;
+      quantity_change: number;
+      type: "IN" | "OUT";
+      notes?: string;
+    }) {
       requireApiUrl();
       const res = await fetch(`${API_URL}/transactions`, {
         method: "POST",
@@ -231,5 +243,3 @@ export const api = {
     },
   },
 };
-
-export { ApiError };
