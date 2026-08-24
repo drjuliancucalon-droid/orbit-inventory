@@ -1,0 +1,20 @@
+name = "orbit-inventory"
+compatibility_date = "2026-06-01"
+
+# orbit-inventory es una SPA de Vite + React (sin backend propio: toda la API
+# la resuelve stocket-be). Se despliega como un Worker que sirve archivos
+# estáticos con el soporte nativo de "assets" de Cloudflare: el build de Vite
+# (carpeta dist/) se sube tal cual y Cloudflare lo sirve desde su red
+# perimetral (CDN), con HTTPS incluido.
+#
+# "single-page-application" hace que cualquier ruta que no sea un archivo
+# real (ej. /dashboard, /products tras recargar la página) devuelva
+# index.html, para que react-router-dom pueda tomar el control en el cliente.
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+
+# VITE_API_URL se configura como variable de compilación (build variable) en
+# el propio Worker en Cloudflare (Settings -> Build), no aquí: Vite la
+# incrusta en el bundle en tiempo de "npm run build", y un Worker de solo
+# activos estáticos no admite variables en tiempo de ejecución.
