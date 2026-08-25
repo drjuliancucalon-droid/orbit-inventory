@@ -8,14 +8,21 @@ export function DonutChart({ segments, centerLabel, centerSub }: { segments: Seg
   const circumference = 2 * Math.PI * r;
   const gap = 3; // separación visual entre segmentos, en unidades de arco
 
-  let offset = 0;
-  const arcs = segments.map((s) => {
-    const raw = total > 0 ? (s.value / total) * circumference : 0;
-    const length = Math.max(raw - gap, 0);
-    const arc = { ...s, length, offset: -offset, pct: total > 0 ? Math.round((s.value / total) * 100) : 0 };
-    offset += raw;
-    return arc;
-  });
+  const arcs = segments.reduce<{
+    arcList: Array<Segment & { length: number; offset: number; pct: number }>;
+    offset: number;
+  }>(
+    (acc, s) => {
+      const raw = total > 0 ? (s.value / total) * circumference : 0;
+      const length = Math.max(raw - gap, 0);
+      const arc = { ...s, length, offset: -acc.offset, pct: total > 0 ? Math.round((s.value / total) * 100) : 0 };
+      return {
+        arcList: [...acc.arcList, arc],
+        offset: acc.offset + raw,
+      };
+    },
+    { arcList: [], offset: 0 }
+  ).arcList;
 
   return (
     <div className="donut-wrap">

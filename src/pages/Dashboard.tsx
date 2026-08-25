@@ -1,14 +1,13 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { LineChart } from "../components/charts/LineChart";
 import { DonutChart } from "../components/charts/DonutChart";
 import { BarList } from "../components/charts/BarList";
-import { IconAlert } from "../components/Icons";
+import { IconAlert, IconTrendingUp } from "../components/Icons";
 import { api, type DashboardMetrics, type TopProduct, type Transaction, type Product } from "../lib/api";
 import { formatCOP, timeAgo } from "../lib/format";
 import { useAuth } from "../lib/auth";
-
-const LOW_STOCK_THRESHOLD = 10;
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -20,7 +19,12 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.dashboard.metrics(), api.dashboard.topProducts(), api.dashboard.recentTransactions(), api.products.getAll()])
+    Promise.all([
+      api.dashboard.metrics(),
+      api.dashboard.topProducts(),
+      api.dashboard.recentTransactions(),
+      api.products.getAll(),
+    ])
       .then(([m, t, r, p]) => {
         setMetrics(m);
         setTopProducts(t);
@@ -34,18 +38,21 @@ export function Dashboard() {
   const firstName = user?.full_name?.split(" ")[0] ?? "";
   const today = new Date().toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
 
-  const lowStock = products.filter((p) => p.quantity <= LOW_STOCK_THRESHOLD);
+  // Cálculo de alertas según min_stock individual de cada producto
+  const lowStock = products.filter((p) => p.quantity > 0 && p.quantity <= (p.min_stock ?? 5));
   const outOfStock = products.filter((p) => p.quantity === 0);
-  const lowNotOut = lowStock.length - outOfStock.length;
-  const inStock = products.length - lowStock.length;
+  const inStock = products.filter((p) => p.quantity > (p.min_stock ?? 5));
 
   const chronological = [...recent].reverse();
-  let running = 0;
-  const trendValues = chronological.map((t) => (running += t.quantity_change));
+  const trendValues = chronological.reduce<number[]>((acc, t) => {
+    const prev = acc.length > 0 ? acc[acc.length - 1] : 0;
+    acc.push(prev + t.quantity_change);
+    return acc;
+  }, []);
 
-  const todayCutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const recentIn = recent.filter((t) => t.type === "IN" && new Date(t.created_at).getTime() >= todayCutoff).length;
-  const recentOut = recent.filter((t) => t.type === "OUT" && new Date(t.created_at).getTime() >= todayCutoff).length;
+  const recentIn = recent.filter((t) => t.type === "IN").length;
+  const recentOut = recent.filter((t) => t.type === "OUT").length;
+
 
   return (
     <Layout>
@@ -62,26 +69,47 @@ export function Dashboard() {
 
       {!loading && !error && metrics && (
         <>
+          {/* Fila de KPIs Financieros y Operativos */}
           <div className="kpi-row">
             <div className="kpi-card hero glass">
-              <div className="kpi-label">Valor total de inventario</div>
+              <div className="kpi-label">Valor total de inventario (PVP)</div>
               <div className="kpi-value font-display">{formatCOP(metrics.total_value)}</div>
-              <div className="kpi-sub">en {metrics.total_products} productos</div>
+              <div className="kpi-sub">
+                Costo inversión: {formatCOP(metrics.total_cost_value ?? 0)}
+              </div>
             </div>
+
             <div className="kpi-card glass">
-              <div className="kpi-label">Productos activos</div>
-              <div className="kpi-value font-display">{metrics.total_products}</div>
+              <div className="kpi-label">
+                <IconTrendingUp size={14} style={{ color: "var(--status-good-text)" }} />
+                Margen Bruto Proyectado
+              </div>
+              <div className="kpi-value font-display" style={{ color: "var(--status-good-text)" }}>
+                {metrics.avg_margin_pct ?? 0}%
+              </div>
+              <div className="kpi-sub">
+                Utilidad potencial: {formatCOP(metrics.potential_profit ?? 0)}
+              </div>
             </div>
+
             <div className="kpi-card warn glass">
-              <div className="kpi-label"><IconAlert size={14} />Alertas de stock bajo</div>
-              <div className="kpi-value font-display">{metrics.low_stock_products}</div>
-              <div className="kpi-sub">requieren reposición</div>
+              <div className="kpi-label">
+                <IconAlert size={14} /> Alertas de Stock Bajo
+              </div>
+              <div className="kpi-value font-display">{lowStock.length + outOfStock.length}</div>
+              <div className="kpi-sub">
+                {outOfStock.length > 0 ? `${outOfStock.length} agotados · ` : ""}
+                {lowStock.length} por reponer
+              </div>
             </div>
+
             <div className="kpi-card glass">
               <div className="kpi-label">Movimientos (24h)</div>
               <div className="kpi-value font-display">{metrics.recent_transactions}</div>
-              {(recentIn > 0 || recentOut > 0) && (
+              {(recentIn > 0 || recentOut > 0) ? (
                 <div className="kpi-sub">{recentIn} entradas · {recentOut} salidas</div>
+              ) : (
+                <div className="kpi-sub">{metrics.total_products} productos registrados</div>
               )}
             </div>
           </div>
@@ -89,22 +117,29 @@ export function Dashboard() {
           <div className="chart-row">
             <div className="panel glass">
               <div className="panel-head">
-                <div className="panel-title">Movimiento de stock</div>
+                <div className="panel-title">Flujo de movimientos de stock</div>
                 <div className="panel-note">Últimos {chronological.length} movimientos</div>
               </div>
-              <LineChart values={trendValues} labelForLast={chronological.length ? `${trendValues[trendValues.length - 1] >= 0 ? "+" : ""}${trendValues[trendValues.length - 1]} uds` : undefined} />
+              <LineChart
+                values={trendValues}
+                labelForLast={
+                  chronological.length
+                    ? `${trendValues[trendValues.length - 1] >= 0 ? "+" : ""}${trendValues[trendValues.length - 1]} uds`
+                    : undefined
+                }
+              />
             </div>
 
             <div className="panel glass">
               <div className="panel-head">
-                <div className="panel-title">Estado del inventario</div>
+                <div className="panel-title">Estado de abastecimiento</div>
               </div>
               <DonutChart
                 centerLabel={String(products.length)}
-                centerSub="productos"
+                centerSub="artículos"
                 segments={[
-                  { label: "En stock", value: inStock, color: "#0ca30c" },
-                  { label: "Stock bajo", value: lowNotOut, color: "#fab219" },
+                  { label: "En stock", value: inStock.length, color: "#0ca30c" },
+                  { label: "Stock bajo", value: lowStock.length, color: "#fab219" },
                   { label: "Agotado", value: outOfStock.length, color: "#d03b3b" },
                 ]}
               />
@@ -114,9 +149,14 @@ export function Dashboard() {
           <div className="bottom-row">
             <div className="panel glass">
               <div className="panel-head">
-                <div className="panel-title">Más movimiento</div>
+                <div className="panel-title">Productos con mayor rotación</div>
               </div>
-              <BarList items={topProducts.slice(0, 4).map((p) => ({ label: p.name, value: p.transactions }))} />
+              <BarList
+                items={topProducts.slice(0, 4).map((p) => ({
+                  label: p.name,
+                  value: p.transactions,
+                }))}
+              />
             </div>
 
             <div className="panel glass">
@@ -131,9 +171,15 @@ export function Dashboard() {
                     <div className="feed-row" key={t.id}>
                       <div className={`feed-icon ${t.type === "IN" ? "in" : "out"}`}>
                         {t.type === "IN" ? (
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc3d" strokeWidth={2.5}><path d="M12 19V5" /><path d="M5 12l7-7 7 7" /></svg>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3ddc3d" strokeWidth={2.5}>
+                            <path d="M12 19V5" />
+                            <path d="M5 12l7-7 7 7" />
+                          </svg>
                         ) : (
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b3a6ff" strokeWidth={2.5}><path d="M12 5v14" /><path d="M5 12l7 7 7-7" /></svg>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#b3a6ff" strokeWidth={2.5}>
+                            <path d="M12 5v14" />
+                            <path d="M5 12l7 7 7-7" />
+                          </svg>
                         )}
                       </div>
                       <div className="feed-main">
@@ -150,14 +196,20 @@ export function Dashboard() {
             </div>
           </div>
 
-          {lowStock.length > 0 && (
+          {(lowStock.length > 0 || outOfStock.length > 0) && (
             <div className="alert-strip">
               <IconAlert size={18} style={{ color: "var(--status-warning)", flexShrink: 0 }} />
               <div className="alert-text">
-                <b>{lowStock.length} producto{lowStock.length === 1 ? "" : "s"}</b> {lowStock.length === 1 ? "está" : "están"} por debajo del
-                mínimo — {lowStock.slice(0, 2).map((p) => p.name).join(", ")}
-                {lowStock.length > 2 ? ` y ${lowStock.length - 2} más.` : "."}
+                <b>{lowStock.length + outOfStock.length} producto{lowStock.length + outOfStock.length === 1 ? "" : "s"}</b>{" "}
+                requieren atención —{" "}
+                {[...outOfStock, ...lowStock].slice(0, 2).map((p) => p.name).join(", ")}
+                {lowStock.length + outOfStock.length > 2
+                  ? ` y ${lowStock.length + outOfStock.length - 2} más.`
+                  : "."}
               </div>
+              <Link to="/products" className="alert-cta" style={{ textDecoration: "none" }}>
+                Ver productos
+              </Link>
             </div>
           )}
         </>
